@@ -373,8 +373,58 @@ func (s *APIV1Service) UpdateUserSetting(ctx context.Context, request *v1pb.Upda
 		return nil, status.Errorf(codes.InvalidArgument, "invalid setting key: %v", err)
 	}
 
+	// get existing user setting
+	existingUserSetting, err := s.Store.GetUserSetting(ctx, &store.FindUserSetting{
+		UserID: &userID,
+		Key:    storeKey,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if existingUserSetting == nil {
+		return nil, status.Errorf(codes.NotFound, "%s not found", storeKey.String())
+	}
+
+	// Only GENERAL settings are supported via UpdateUserSetting
+	// Other setting types have dedicated service methods
+	if storeKey != storepb.UserSetting_GENERAL {
+		return nil, status.Errorf(codes.InvalidArgument, "setting type %s should not be updated via UpdateUserSetting", storeKey.String())
+	}
+
+	// Start with existing general setting values
+	existingGeneral := existingUserSetting.GetGeneral()
+	updatedGeneral := &v1pb.UserSetting_GeneralSetting{
+		Appearance:     existingGeneral.GetAppearance(),
+		MemoVisibility: existingGeneral.GetMemoVisibility(),
+		Locale:         existingGeneral.GetLocale(),
+		Theme:          existingGeneral.GetTheme(),
+	}
+
+	// Apply updates for fields specified in the update mask
+	incomingGeneral := request.Setting.GetGeneralSetting()
+	for _, field := range request.UpdateMask.Paths {
+		switch field {
+		case "appearance":
+			updatedGeneral.Appearance = incomingGeneral.Appearance
+		case "memoVisibility":
+			updatedGeneral.MemoVisibility = incomingGeneral.MemoVisibility
+		case "theme":
+			updatedGeneral.Theme = incomingGeneral.Theme
+		case "locale":
+			updatedGeneral.Locale = incomingGeneral.Locale
+		}
+	}
+
+	// Create the updated setting
+	updatedSetting := &v1pb.UserSetting{
+		Name: request.Setting.Name,
+		Value: &v1pb.UserSetting_GeneralSetting_{
+			GeneralSetting: updatedGeneral,
+		},
+	}
+
 	// Convert API setting to store setting
-	storeSetting, err := convertUserSettingToStore(request.Setting, userID, storeKey)
+	storeSetting, err := convertUserSettingToStore(updatedSetting, userID, storeKey)
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "failed to convert setting: %v", err)
 	}
